@@ -43,26 +43,20 @@ class OCRWorker(QThread):
         }
 
     def preprocess_image(self, img):
-        # Convert to RGB first (EasyOCR prefers RGB)
+        # Simple and effective preprocessing for Minecraft font
         img_rgb = cv.cvtColor(img, cv.COLOR_BGR2RGB)
         
-        # Scale up image significantly
-        scaled = cv.resize(img_rgb, None, fx=5, fy=5, 
+        # Scale up image (Minecraft font is small)
+        scaled = cv.resize(img_rgb, None, fx=2, fy=2, 
                          interpolation=cv.INTER_CUBIC)
         
-        # Convert to grayscale after scaling
+        # Convert to grayscale
         gray = cv.cvtColor(scaled, cv.COLOR_RGB2GRAY)
         
-        # Apply threshold to get pure black and white
-        _, binary = cv.threshold(gray, 127, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
+        # Simple threshold
+        _, binary = cv.threshold(gray, 200, 255, cv.THRESH_BINARY)
         
-        # Add white padding around the image
-        padded = cv.copyMakeBorder(binary, 20, 20, 20, 20, 
-                                  cv.BORDER_CONSTANT, 
-                                  value=[255, 255, 255])
-        
-        return padded
-
+        return binary
 
     def update_statistics(self, nick, has_triple, capital_count, only_letters):
         self.stats['total_attempts'] += 1
@@ -111,12 +105,12 @@ class OCRWorker(QThread):
                     continue
                 
                 with mss.mss() as screen:
-                    # Adjusted capture area
+                    # Precise capture area for Minecraft username
                     image = screen.grab({
-                        "top": 331,     # Moved up 1 pixel
-                        "left": 842,    # Moved left 1 pixel
-                        "width": 219,   # Slightly wider
-                        "height": 26    # Slightly taller
+                        "top": 332,
+                        "left": 843,
+                        "width": 217,
+                        "height": 24
                     })
                     mss.tools.to_png(image.rgb, image.size, output="output.png")
                 
@@ -125,22 +119,13 @@ class OCRWorker(QThread):
                     self.update_status.emit("Failed to read image")
                     continue
                 
-                # Simple preprocessing
                 processed = self.preprocess_image(img)
                 
-                # Save processed image for debugging
-                cv.imwrite("processed.png", processed)
-                
-                # OCR with better confidence handling
+                # Basic OCR settings
                 results = self.reader.readtext(
                     processed,
                     allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz,.',
-                    batch_size=1,
-                    min_size=20,  # Increased minimum text size
-                    text_threshold=0.8,  # Higher confidence threshold
-                    low_text=0.3,  # Lower text confidence threshold
-                    link_threshold=0.3,  # Lower link confidence threshold
-                    canvas_size=2560  # Larger canvas size
+                    batch_size=1
                 )
                 
                 if not results:
@@ -215,11 +200,6 @@ class OCRWorker(QThread):
         if os.path.exists("output.png"):
             try:
                 os.remove("output.png")
-            except:
-                pass
-        if os.path.exists("processed.png"):
-            try:
-                os.remove("processed.png")
             except:
                 pass
 
