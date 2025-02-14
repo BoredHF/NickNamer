@@ -32,33 +32,53 @@ class OCRWorker(QThread):
         self.running = False
 
     def preprocess_image(self, img):
-        # Convert to grayscale
-        gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        # Create multiple preprocessing versions
+        preprocessed_images = []
         
-        # Increase contrast
-        clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        gray = clahe.apply(gray)
+        # Version 1: High contrast black and white
+        gray1 = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        _, binary1 = cv.threshold(gray1, 127, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
+        preprocessed_images.append(binary1)
         
-        # Apply adaptive thresholding instead of simple threshold
-        binary = cv.adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                    cv.THRESH_BINARY, 11, 2)
+        # Version 2: Adaptive threshold
+        gray2 = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        binary2 = cv.adaptiveThreshold(gray2, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                     cv.THRESH_BINARY, 11, 2)
+        preprocessed_images.append(binary2)
         
-        # Remove noise
-        denoised = cv.fastNlMeansDenoising(binary)
+        # Version 3: Enhanced contrast
+        gray3 = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        clahe = cv.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(gray3)
+        _, binary3 = cv.threshold(enhanced, 127, 255, cv.THRESH_BINARY)
+        preprocessed_images.append(binary3)
         
-        # Scale up image before further processing
-        scaled = cv.resize(denoised, None, fx=2, fy=2, interpolation=cv.INTER_CUBIC)
+        # Process each version
+        processed_images = []
+        for binary in preprocessed_images:
+            # Scale up
+            scaled = cv.resize(binary, None, fx=3, fy=3, interpolation=cv.INTER_CUBIC)
+            
+            # Denoise
+            denoised = cv.fastNlMeansDenoising(scaled)
+            
+            # Sharpen
+            kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+            sharpened = cv.filter2D(denoised, -1, kernel)
+            
+            processed_images.append(sharpened)
         
-        # Dilate to make text clearer
-        kernel = np.ones((2,2), np.uint8)
-        dilated = cv.dilate(scaled, kernel, iterations=1)
-        
-        return dilated
+        return processed_images
 
     def run(self):
         pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-        # Update config to include numbers and underscore
-        custom_config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_,.'
+        
+        # Multiple OCR configurations
+        configs = [
+            r'--oem 3 --psm 7 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_,.',
+            r'--oem 3 --psm 8 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_,.',
+            r'--oem 3 --psm 13'  # Raw line with default config
+        ]
         
         while self.running:
             try:
@@ -68,8 +88,8 @@ class OCRWorker(QThread):
                 time.sleep(self.delay)
                 
                 with mss.mss() as screen:
-                    # Capture a slightly larger area
-                    image = screen.grab({"top": 330, "left": 841, "width": 221, "height": 28})
+                    # Capture a larger area
+                    image = screen.grab({"top": 328, "left": 840, "width": 225, "height": 32})
                     mss.tools.to_png(image.rgb, image.size, output="output.png")
                 
                 img = cv.imread("output.png")
@@ -77,32 +97,29 @@ class OCRWorker(QThread):
                     self.update_status.emit("Failed to read image")
                     continue
                 
-                # Enhanced image processing
-                processed = self.preprocess_image(img)
+                # Get all preprocessed versions
+                processed_images = self.preprocess_image(img)
                 
-                # Apply multiple processing methods and combine results
-                hsv = cv.cvtColor(img, cv.COLOR_BGR2HSV)
-                msk = cv.inRange(hsv, np.array([0, 0, 123]), np.array([179, 255, 255]))
-                msk = cv.resize(msk, (processed.shape[1], processed.shape[0]))
+                # Try OCR with different configurations and preprocessed images
+                all_attempts = []
+                for processed in processed_images:
+                    for config in configs:
+                        result = pytesseract.image_to_string(processed, config=config).strip()
+                        if result:
+                            all_attempts.append(result)
                 
-                combined = cv.bitwise_and(processed, processed, mask=msk)
+                # Debug output
+                self.update_text.emit("OCR attempts:")
+                for i, attempt in enumerate(all_attempts):
+                    self.update_text.emit(f"Attempt {i+1}: {attempt}")
                 
-                # Convert to QImage for display
-                h, w = combined.shape
-                q_img = QImage(combined.data, w, h, w, QImage.Format.Format_Grayscale8)
-                self.update_image.emit(q_img)
+                # Choose the best result
+                nick = max(all_attempts, key=lambda x: sum(c.isalnum() or c == '_' for c in x), default="")
                 
-                # Multiple OCR attempts with different preprocessing
-                nick_attempts = [
-                    pytesseract.image_to_string(combined, config=custom_config).strip(),
-                    pytesseract.image_to_string(processed, config=custom_config).strip(),
-                    pytesseract.image_to_string(msk, config=custom_config).strip()
-                ]
+                if not nick:
+                    continue
                 
-                # Use the most likely result (non-empty and contains valid characters)
-                nick = next((n for n in nick_attempts if n and any(c.isalnum() or c == '_' for c in n)), nick_attempts[0])
-                
-                self.update_text.emit(f"Detected: {nick}")
+                self.update_text.emit(f"Selected: {nick}")
                 
                 if nick in ["name,", "name."]:
                     self.update_status.emit("Found 'name', clicking error...")
@@ -110,25 +127,21 @@ class OCRWorker(QThread):
                     time.sleep(1.7)
                     continue
                 
-                # Updated pattern matching
-                has_triple = re.search(r'([a-z])\1{2,}', nick, re.IGNORECASE) is not None
+                # Updated pattern matching with better debugging
+                has_triple = re.search(r'([a-zA-Z])\1{2,}', nick) is not None
                 capital_count = sum(1 for letter in nick if letter.isupper())
                 valid_chars = all(c.isalnum() or c == '_' for c in nick.replace(',', '').replace('.', ''))
                 
-                # Print debug info
-                self.update_text.emit(f"Triple letters: {has_triple}")
-                self.update_text.emit(f"Capital count: {capital_count}")
+                self.update_text.emit(f"Analysis for '{nick}':")
+                self.update_text.emit(f"Has triple letters: {has_triple}")
+                self.update_text.emit(f"Capital letters: {capital_count}")
+                self.update_text.emit(f"Valid characters: {valid_chars}")
                 
-                # Only proceed if exactly one capital and has triple letters
                 if has_triple and capital_count == 1 and valid_chars:
-                    # Double check the pattern
-                    if re.search(r'([a-zA-Z])\1{2,}', nick) is not None:
-                        self.update_status.emit("Valid name found! Clicking Use...")
-                        pyautogui.click("Use.PNG")
-                        pyautogui.click()
-                        break
-                    else:
-                        self.update_text.emit("Triple letter pattern not confirmed")
+                    self.update_status.emit("Valid name found! Clicking Use...")
+                    pyautogui.click("Use.PNG")
+                    pyautogui.click()
+                    break
                 
                 self.update_progress.emit(50)
                 
