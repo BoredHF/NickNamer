@@ -28,7 +28,7 @@ class OCRWorker(QThread):
         # Initialize EasyOCR with basic settings
         self.reader = easyocr.Reader(
             ['en'], 
-            gpu=True,
+            gpu=False,
             model_storage_directory='./models',
             user_network_directory='./models'
         )
