@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, QLabel,
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QPixmap, QImage
 import sys
+import os
 
 class OCRWorker(QThread):
     update_image = pyqtSignal(QImage)
@@ -34,7 +35,8 @@ class OCRWorker(QThread):
         return dilated
 
     def run(self):
-        pytesseract.pytesseract.tesseract_cmd = 'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        # Fix escape sequence in path
+        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
         custom_config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.,'
         
         while self.running:
@@ -188,6 +190,14 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Status: {status}")
 
 if __name__ == "__main__":
+    # Set DPI awareness
+    if os.name == 'nt':  # Windows only
+        try:
+            from ctypes import windll
+            windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            pass  # Ignore if it fails
+            
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
