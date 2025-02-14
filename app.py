@@ -65,13 +65,13 @@ class OCRWorker(QThread):
         # Convert to grayscale
         gray = cv.cvtColor(img_rgb, cv.COLOR_RGB2GRAY)
         
-        # Binary threshold to separate white text (no inversion)
-        _, binary = cv.threshold(gray, 240, 255, cv.THRESH_BINARY)
+        # Binary threshold to get black text on white background
+        _, binary = cv.threshold(gray, 200, 255, cv.THRESH_BINARY_INV)
         
-        # Add white padding around the image
+        # Add black padding around the image
         padded = cv.copyMakeBorder(binary, 10, 10, 10, 10,
                                  cv.BORDER_CONSTANT,
-                                 value=[255, 255, 255])
+                                 value=[0, 0, 0])
         
         return padded
 
