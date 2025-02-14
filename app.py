@@ -59,9 +59,19 @@ class OCRWorker(QThread):
         self.delay = float(delay)  # Ensure delay is a float
 
     def preprocess_image(self, img):
-        # Just convert to RGB as EasyOCR expects RGB
-        img_rgb = cv.cvtColor(img, cv.COLOR_BGR2RGB)
-        return img_rgb
+        # Convert to grayscale first
+        gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        
+        # Invert the image since the text is white on dark background
+        inverted = cv.bitwise_not(gray)
+        
+        # Convert back to RGB (3 channels) as EasyOCR expects RGB
+        rgb = cv.cvtColor(inverted, cv.COLOR_GRAY2RGB)
+        
+        # Save for debugging
+        cv.imwrite("debug_processed.png", rgb)
+        
+        return rgb
 
     def update_statistics(self, nick, has_triple, capital_count, only_letters):
         self.stats['total_attempts'] += 1
@@ -111,15 +121,11 @@ class OCRWorker(QThread):
                 
                 with mss.mss() as screen:
                     # Capture area
-                    image = screen.grab({
-                        "top": 332,
-                        "left": 843,
-                        "width": 217,
-                        "height": 24
-                    })
-                    mss.tools.to_png(image.rgb, image.size, output="output.png")
+                    monitor = {"top": 332, "left": 843, "width": 217, "height": 24}
+                    screenshot = np.array(screen.grab(monitor))
+                    # Convert from BGRA to BGR
+                    img = cv.cvtColor(screenshot, cv.COLOR_BGRA2BGR)
                 
-                img = cv.imread("output.png")
                 if img is None:
                     self.update_status.emit("Failed to read image")
                     continue
