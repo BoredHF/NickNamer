@@ -25,18 +25,15 @@ class OCRWorker(QThread):
         super().__init__()
         self.running = True
         self.delay = delay
-        # Initialize EasyOCR with optimized settings
+        # Initialize EasyOCR with corrected settings
         self.reader = easyocr.Reader(
             ['en'], 
-            gpu=False,
+            gpu=True,
             model_storage_directory='./models',
             user_network_directory='./models',
             recog_network='english_g2',
-            paragraph=False,
             detect_network='craft',
-            rotation_info=[0],
-            width_ths=2.0,  # More aggressive width threshold
-            mag_ratio=2.5   # Larger magnification
+            rotation_info=[0]
         )
         self.stats = {
             'total_attempts': 0,
@@ -208,9 +205,13 @@ class OCRWorker(QThread):
                 self.update_status.emit(f"Error: {str(e)}")
                 time.sleep(1)
 
-    def cleanup(self):
-        """Clean up resources when stopping"""
+    def stop(self):
+        """Stop the worker thread"""
         self.running = False
+        self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
         if hasattr(self, 'reader'):
             del self.reader
         # Remove temporary files
@@ -219,9 +220,11 @@ class OCRWorker(QThread):
                 os.remove("output.png")
             except:
                 pass
-
-    def stop(self):
-        self.cleanup()
+        if os.path.exists("processed.png"):
+            try:
+                os.remove("processed.png")
+            except:
+                pass
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -372,11 +375,12 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(True)
 
     def stop_ocr(self):
-        self.worker.cleanup()
-        self.worker.wait()
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.update_status("Stopped")
+        if hasattr(self, 'worker'):
+            self.worker.stop()
+            self.worker.wait()
+            self.start_button.setEnabled(True)
+            self.stop_button.setEnabled(False)
+            self.update_status("Stopped")
 
     def update_image(self, q_img):
         pixmap = QPixmap.fromImage(q_img)
