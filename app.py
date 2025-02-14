@@ -7,7 +7,8 @@ import pyautogui
 import numpy as np
 from PIL import Image
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, QLabel, 
-                            QVBoxLayout, QWidget, QTextEdit, QProgressBar)
+                            QVBoxLayout, QWidget, QTextEdit, QProgressBar,
+                            QSlider, QHBoxLayout)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QPixmap, QImage
 import sys
@@ -19,9 +20,13 @@ class OCRWorker(QThread):
     update_status = pyqtSignal(str)
     update_progress = pyqtSignal(int)
 
-    def __init__(self):
+    def __init__(self, delay=1.0):
         super().__init__()
         self.running = True
+        self.delay = delay
+
+    def set_delay(self, delay):
+        self.delay = delay
 
     def stop(self):
         self.running = False
@@ -35,7 +40,6 @@ class OCRWorker(QThread):
         return dilated
 
     def run(self):
-        # Fix escape sequence in path
         pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
         custom_config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.,'
         
@@ -44,7 +48,7 @@ class OCRWorker(QThread):
                 self.update_status.emit("Clicking try again...")
                 pyautogui.click("tryagain.png")
                 pyautogui.click()
-                time.sleep(1)
+                time.sleep(self.delay)
                 
                 with mss.mss() as screen:
                     image = screen.grab({"top": 332, "left": 843, "width": 217, "height": 24})
@@ -100,7 +104,23 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
 
-        # Create GUI elements
+        # Create delay control
+        delay_container = QWidget()
+        delay_layout = QHBoxLayout(delay_container)
+        
+        self.delay_label = QLabel("Delay (seconds): 1.0")
+        self.delay_slider = QSlider(Qt.Orientation.Horizontal)
+        self.delay_slider.setMinimum(5)
+        self.delay_slider.setMaximum(30)
+        self.delay_slider.setValue(10)  # Default 1.0 second (10 * 0.1)
+        self.delay_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.delay_slider.setTickInterval(5)
+        self.delay_slider.valueChanged.connect(self.update_delay_label)
+        
+        delay_layout.addWidget(self.delay_label)
+        delay_layout.addWidget(self.delay_slider)
+
+        # Create other GUI elements
         self.start_button = QPushButton("Start")
         self.stop_button = QPushButton("Stop")
         self.stop_button.setEnabled(False)
@@ -112,6 +132,7 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar()
 
         # Add widgets to layout
+        layout.addWidget(delay_container)
         layout.addWidget(self.start_button)
         layout.addWidget(self.stop_button)
         layout.addWidget(self.image_label)
@@ -155,10 +176,34 @@ class MainWindow(QMainWindow):
             QProgressBar::chunk {
                 background-color: #0d47a1;
             }
+            QSlider::groove:horizontal {
+                border: 1px solid #999999;
+                height: 8px;
+                background: #363636;
+                margin: 2px 0;
+                border-radius: 4px;
+            }
+            QSlider::handle:horizontal {
+                background: #0d47a1;
+                border: 1px solid #0d47a1;
+                width: 18px;
+                margin: -2px 0;
+                border-radius: 9px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #1565c0;
+            }
         """)
 
+    def update_delay_label(self):
+        delay = self.delay_slider.value() / 10.0
+        self.delay_label.setText(f"Delay (seconds): {delay:.1f}")
+        if hasattr(self, 'worker'):
+            self.worker.set_delay(delay)
+
     def start_ocr(self):
-        self.worker = OCRWorker()
+        delay = self.delay_slider.value() / 10.0
+        self.worker = OCRWorker(delay=delay)
         self.worker.update_image.connect(self.update_image)
         self.worker.update_text.connect(self.update_text)
         self.worker.update_status.connect(self.update_status)
