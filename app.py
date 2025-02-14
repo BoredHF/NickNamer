@@ -1,11 +1,11 @@
 import mss
 import cv2 as cv
-import pytesseract
 import re
 import time
 import pyautogui
 import numpy as np
 from PIL import Image
+import easyocr
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, QLabel, 
                             QVBoxLayout, QWidget, QTextEdit, QProgressBar,
                             QSlider, QHBoxLayout)
@@ -24,12 +24,8 @@ class OCRWorker(QThread):
         super().__init__()
         self.running = True
         self.delay = delay
-
-    def set_delay(self, delay):
-        self.delay = delay
-
-    def stop(self):
-        self.running = False
+        # Initialize EasyOCR reader
+        self.reader = easyocr.Reader(['en'], gpu=False)
 
     def preprocess_image(self, img):
         # Create multiple preprocessing versions
@@ -40,46 +36,22 @@ class OCRWorker(QThread):
         _, binary1 = cv.threshold(gray1, 127, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
         preprocessed_images.append(binary1)
         
-        # Version 2: Adaptive threshold
+        # Version 2: Enhanced contrast
         gray2 = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-        binary2 = cv.adaptiveThreshold(gray2, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                     cv.THRESH_BINARY, 11, 2)
-        preprocessed_images.append(binary2)
-        
-        # Version 3: Enhanced contrast
-        gray3 = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
         clahe = cv.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(gray3)
-        _, binary3 = cv.threshold(enhanced, 127, 255, cv.THRESH_BINARY)
-        preprocessed_images.append(binary3)
+        enhanced = clahe.apply(gray2)
+        preprocessed_images.append(enhanced)
         
         # Process each version
         processed_images = []
-        for binary in preprocessed_images:
+        for img_version in preprocessed_images:
             # Scale up
-            scaled = cv.resize(binary, None, fx=3, fy=3, interpolation=cv.INTER_CUBIC)
-            
-            # Denoise
-            denoised = cv.fastNlMeansDenoising(scaled)
-            
-            # Sharpen
-            kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-            sharpened = cv.filter2D(denoised, -1, kernel)
-            
-            processed_images.append(sharpened)
+            scaled = cv.resize(img_version, None, fx=3, fy=3, interpolation=cv.INTER_CUBIC)
+            processed_images.append(scaled)
         
         return processed_images
 
     def run(self):
-        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-        
-        # Multiple OCR configurations
-        configs = [
-            r'--oem 3 --psm 7 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_,.',
-            r'--oem 3 --psm 8 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_,.',
-            r'--oem 3 --psm 13'  # Raw line with default config
-        ]
-        
         while self.running:
             try:
                 self.update_status.emit("Clicking try again...")
@@ -100,28 +72,35 @@ class OCRWorker(QThread):
                 # Get all preprocessed versions
                 processed_images = self.preprocess_image(img)
                 
-                # Try OCR with different configurations and preprocessed images
+                # Try OCR with different preprocessed images
                 all_attempts = []
                 for processed in processed_images:
-                    for config in configs:
-                        result = pytesseract.image_to_string(processed, config=config).strip()
-                        if result:
-                            all_attempts.append(result)
+                    # EasyOCR detection
+                    results = self.reader.readtext(processed)
+                    for result in results:
+                        text = result[1].strip()
+                        if text:
+                            all_attempts.append(text)
                 
                 # Debug output
                 self.update_text.emit("OCR attempts:")
                 for i, attempt in enumerate(all_attempts):
                     self.update_text.emit(f"Attempt {i+1}: {attempt}")
                 
-                # Choose the best result
-                nick = max(all_attempts, key=lambda x: sum(c.isalnum() or c == '_' for c in x), default="")
+                if not all_attempts:
+                    continue
+                
+                # Choose the best result - prefer longer results with valid characters
+                nick = max(all_attempts, 
+                         key=lambda x: (sum(c.isalnum() or c == '_' for c in x), len(x)), 
+                         default="")
                 
                 if not nick:
                     continue
                 
                 self.update_text.emit(f"Selected: {nick}")
                 
-                if nick in ["name,", "name."]:
+                if nick.lower() in ["name,", "name.", "name"]:
                     self.update_status.emit("Found 'name', clicking error...")
                     pyautogui.click("hypixelerror.png")
                     time.sleep(1.7)

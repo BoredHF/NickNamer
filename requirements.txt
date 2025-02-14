@@ -1,6 +1,6 @@
 mss
 opencv-python
-pytesseract
+easyocr
 pyautogui
 numpy
 PyQt6 
