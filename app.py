@@ -24,7 +24,7 @@ class OCRWorker(QThread):
     def __init__(self, delay=1.0):
         super().__init__()
         self.running = True
-        self.delay = delay
+        self.delay = float(delay)
         # Initialize EasyOCR with GPU
         try:
             self.reader = easyocr.Reader(
@@ -56,24 +56,12 @@ class OCRWorker(QThread):
 
     def set_delay(self, delay):
         """Set the delay between attempts"""
-        self.delay = delay
+        self.delay = float(delay)  # Ensure delay is a float
 
     def preprocess_image(self, img):
-        # Convert to RGB
+        # Just convert to RGB as EasyOCR expects RGB
         img_rgb = cv.cvtColor(img, cv.COLOR_BGR2RGB)
-        
-        # Convert to grayscale
-        gray = cv.cvtColor(img_rgb, cv.COLOR_RGB2GRAY)
-        
-        # Binary threshold to get black text on white background
-        _, binary = cv.threshold(gray, 200, 255, cv.THRESH_BINARY_INV)
-        
-        # Add black padding around the image
-        padded = cv.copyMakeBorder(binary, 10, 10, 10, 10,
-                                 cv.BORDER_CONSTANT,
-                                 value=[0, 0, 0])
-        
-        return padded
+        return img_rgb
 
     def update_statistics(self, nick, has_triple, capital_count, only_letters):
         self.stats['total_attempts'] += 1
@@ -136,15 +124,13 @@ class OCRWorker(QThread):
                     self.update_status.emit("Failed to read image")
                     continue
                 
+                # Just convert to RGB, no other preprocessing
                 processed = self.preprocess_image(img)
-                cv.imwrite("processed.png", processed)
                 
-                # OCR with minimal settings
+                # Simple OCR with minimal parameters
                 results = self.reader.readtext(
                     processed,
-                    allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz,.',
-                    batch_size=1,
-                    min_size=10
+                    allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz,.'
                 )
                 
                 self.update_text.emit(f"Raw results: {results}")
@@ -341,8 +327,8 @@ class MainWindow(QMainWindow):
     def update_delay_label(self):
         delay = self.delay_slider.value() / 10.0
         self.delay_label.setText(f"Delay (seconds): {delay:.1f}")
-        if hasattr(self, 'worker'):
-            self.worker.set_delay(delay)
+        if hasattr(self, 'worker') and self.worker.isRunning():
+            self.worker.delay = delay  # Directly update the delay value
 
     def start_ocr(self):
         delay = self.delay_slider.value() / 10.0
