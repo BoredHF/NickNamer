@@ -29,20 +29,21 @@ class OCRWorker(QThread):
         try:
             self.reader = easyocr.Reader(
                 ['en'], 
-                gpu=True,  # Enable GPU
+                gpu=True,
                 model_storage_directory='./models',
-                user_network_directory='./models'
+                user_network_directory='./models',
+                download_enabled=True
             )
             self.update_status.emit("Using GPU for OCR")
         except Exception as e:
-            # Fallback to CPU if GPU fails
             self.reader = easyocr.Reader(
                 ['en'], 
                 gpu=False,
                 model_storage_directory='./models',
-                user_network_directory='./models'
+                user_network_directory='./models',
+                download_enabled=True
             )
-            self.update_status.emit("GPU failed, using CPU for OCR")
+            self.update_status.emit("Using CPU for OCR")
         self.stats = {
             'total_attempts': 0,
             'names_checked': 0,
@@ -53,38 +54,26 @@ class OCRWorker(QThread):
             'start_time': time.time()
         }
 
+    def set_delay(self, delay):
+        """Set the delay between attempts"""
+        self.delay = delay
+
     def preprocess_image(self, img):
         # Convert to RGB
         img_rgb = cv.cvtColor(img, cv.COLOR_BGR2RGB)
         
-        # Scale up image (Minecraft font needs more detail)
-        scaled = cv.resize(img_rgb, None, fx=3, fy=3, 
-                         interpolation=cv.INTER_LANCZOS4)
-        
         # Convert to grayscale
-        gray = cv.cvtColor(scaled, cv.COLOR_RGB2GRAY)
+        gray = cv.cvtColor(img_rgb, cv.COLOR_RGB2GRAY)
         
-        # Increase contrast
-        clahe = cv.createCLAHE(clipLimit=3.0, tileGridSize=(4,4))
-        contrast = clahe.apply(gray)
+        # Binary threshold to separate white text (no inversion)
+        _, binary = cv.threshold(gray, 240, 255, cv.THRESH_BINARY)
         
-        # Sharpen the image
-        kernel = np.array([[-1,-1,-1],
-                         [-1, 9,-1],
-                         [-1,-1,-1]])
-        sharpened = cv.filter2D(contrast, -1, kernel)
+        # Add white padding around the image
+        padded = cv.copyMakeBorder(binary, 10, 10, 10, 10,
+                                 cv.BORDER_CONSTANT,
+                                 value=[255, 255, 255])
         
-        # Adaptive threshold
-        binary = cv.adaptiveThreshold(sharpened, 255, 
-                                    cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                    cv.THRESH_BINARY, 11, 2)
-        
-        # Add white border
-        bordered = cv.copyMakeBorder(binary, 10, 10, 10, 10, 
-                                   cv.BORDER_CONSTANT, 
-                                   value=[255, 255, 255])
-        
-        return bordered
+        return padded
 
     def update_statistics(self, nick, has_triple, capital_count, only_letters):
         self.stats['total_attempts'] += 1
@@ -133,7 +122,7 @@ class OCRWorker(QThread):
                     continue
                 
                 with mss.mss() as screen:
-                    # Precise capture area for Minecraft username
+                    # Capture area
                     image = screen.grab({
                         "top": 332,
                         "left": 843,
@@ -148,36 +137,23 @@ class OCRWorker(QThread):
                     continue
                 
                 processed = self.preprocess_image(img)
-                
-                # Save processed image for debugging
                 cv.imwrite("processed.png", processed)
                 
-                # Simpler OCR settings
+                # OCR with minimal settings
                 results = self.reader.readtext(
                     processed,
                     allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz,.',
-                    batch_size=1
+                    batch_size=1,
+                    min_size=10
                 )
                 
-                self.update_text.emit(f"Raw results: {results}")  # Debug output
+                self.update_text.emit(f"Raw results: {results}")
                 
                 if not results:
-                    self.update_text.emit("No text detected")
                     continue
                 
-                # Get text from results
-                if isinstance(results, list):
-                    if len(results) > 0:
-                        if isinstance(results[0], tuple) or isinstance(results[0], list):
-                            nick = results[0][1]  # Get text from first result
-                        else:
-                            nick = results[0]  # First result is the text
-                    else:
-                        continue
-                else:
-                    nick = results  # Single result
-                
-                nick = nick.strip()
+                # Get the text from the first result
+                nick = results[0][1].strip() if results else ""
                 
                 if not nick:
                     continue
