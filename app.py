@@ -25,13 +25,24 @@ class OCRWorker(QThread):
         super().__init__()
         self.running = True
         self.delay = delay
-        # Initialize EasyOCR with basic settings
-        self.reader = easyocr.Reader(
-            ['en'], 
-            gpu=False,
-            model_storage_directory='./models',
-            user_network_directory='./models'
-        )
+        # Initialize EasyOCR with GPU
+        try:
+            self.reader = easyocr.Reader(
+                ['en'], 
+                gpu=True,  # Enable GPU
+                model_storage_directory='./models',
+                user_network_directory='./models'
+            )
+            self.update_status.emit("Using GPU for OCR")
+        except Exception as e:
+            # Fallback to CPU if GPU fails
+            self.reader = easyocr.Reader(
+                ['en'], 
+                gpu=False,
+                model_storage_directory='./models',
+                user_network_directory='./models'
+            )
+            self.update_status.emit("GPU failed, using CPU for OCR")
         self.stats = {
             'total_attempts': 0,
             'names_checked': 0,
@@ -43,20 +54,37 @@ class OCRWorker(QThread):
         }
 
     def preprocess_image(self, img):
-        # Simple and effective preprocessing for Minecraft font
+        # Convert to RGB
         img_rgb = cv.cvtColor(img, cv.COLOR_BGR2RGB)
         
-        # Scale up image (Minecraft font is small)
-        scaled = cv.resize(img_rgb, None, fx=2, fy=2, 
-                         interpolation=cv.INTER_CUBIC)
+        # Scale up image (Minecraft font needs more detail)
+        scaled = cv.resize(img_rgb, None, fx=3, fy=3, 
+                         interpolation=cv.INTER_LANCZOS4)
         
         # Convert to grayscale
         gray = cv.cvtColor(scaled, cv.COLOR_RGB2GRAY)
         
-        # Simple threshold
-        _, binary = cv.threshold(gray, 200, 255, cv.THRESH_BINARY)
+        # Increase contrast
+        clahe = cv.createCLAHE(clipLimit=3.0, tileGridSize=(4,4))
+        contrast = clahe.apply(gray)
         
-        return binary
+        # Sharpen the image
+        kernel = np.array([[-1,-1,-1],
+                         [-1, 9,-1],
+                         [-1,-1,-1]])
+        sharpened = cv.filter2D(contrast, -1, kernel)
+        
+        # Adaptive threshold
+        binary = cv.adaptiveThreshold(sharpened, 255, 
+                                    cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                    cv.THRESH_BINARY, 11, 2)
+        
+        # Add white border
+        bordered = cv.copyMakeBorder(binary, 10, 10, 10, 10, 
+                                   cv.BORDER_CONSTANT, 
+                                   value=[255, 255, 255])
+        
+        return bordered
 
     def update_statistics(self, nick, has_triple, capital_count, only_letters):
         self.stats['total_attempts'] += 1
@@ -121,11 +149,15 @@ class OCRWorker(QThread):
                 
                 processed = self.preprocess_image(img)
                 
-                # Basic OCR settings
+                # OCR with better settings
                 results = self.reader.readtext(
                     processed,
                     allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz,.',
-                    batch_size=1
+                    batch_size=1,
+                    detail=0,  # Just get the text
+                    paragraph=False,  # Treat as single line
+                    contrast_ths=0.3,  # Lower contrast threshold
+                    adjust_contrast=0.8  # Increase contrast
                 )
                 
                 if not results:

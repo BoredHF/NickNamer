@@ -3,4 +3,5 @@ opencv-python
 easyocr
 pyautogui
 numpy
-PyQt6 
+PyQt6
+torch==2.1.0+cu118  # CUDA 11.8 version 
