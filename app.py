@@ -226,11 +226,11 @@ class MainWindow(QMainWindow):
         
         self.delay_label = QLabel("Delay (seconds): 1.0")
         self.delay_slider = QSlider(Qt.Orientation.Horizontal)
-        self.delay_slider.setMinimum(5)
-        self.delay_slider.setMaximum(30)
-        self.delay_slider.setValue(10)  # Default 1.0 second (10 * 0.1)
+        self.delay_slider.setMinimum(5)    # 0.5 seconds
+        self.delay_slider.setMaximum(100)  # 10 seconds
+        self.delay_slider.setValue(10)      # Default 1.0 second (10 * 0.1)
         self.delay_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.delay_slider.setTickInterval(5)
+        self.delay_slider.setTickInterval(10)
         self.delay_slider.valueChanged.connect(self.update_delay_label)
         
         delay_layout.addWidget(self.delay_label)
