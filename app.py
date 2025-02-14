@@ -149,42 +149,40 @@ class OCRWorker(QThread):
                 
                 processed = self.preprocess_image(img)
                 
-                # OCR with better settings
+                # Save processed image for debugging
+                cv.imwrite("processed.png", processed)
+                
+                # Simpler OCR settings
                 results = self.reader.readtext(
                     processed,
                     allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz,.',
-                    batch_size=1,
-                    detail=0,  # Just get the text
-                    paragraph=False,  # Treat as single line
-                    contrast_ths=0.3,  # Lower contrast threshold
-                    adjust_contrast=0.8  # Increase contrast
+                    batch_size=1
                 )
+                
+                self.update_text.emit(f"Raw results: {results}")  # Debug output
                 
                 if not results:
                     self.update_text.emit("No text detected")
                     continue
                 
-                # Get the result with highest confidence
-                result = max(results, key=lambda x: x[2])
-                nick = result[1].strip()
-                confidence = result[2]
+                # Get text from results
+                if isinstance(results, list):
+                    if len(results) > 0:
+                        if isinstance(results[0], tuple) or isinstance(results[0], list):
+                            nick = results[0][1]  # Get text from first result
+                        else:
+                            nick = results[0]  # First result is the text
+                    else:
+                        continue
+                else:
+                    nick = results  # Single result
                 
-                self.update_text.emit(f"Detected: {nick} (Confidence: {confidence:.2f})")
+                nick = nick.strip()
                 
-                if confidence < 0.8:  # Stricter confidence threshold
-                    self.update_text.emit("Low confidence - skipping")
+                if not nick:
                     continue
                 
-                # Clean up the text
-                nick = nick.rstrip('.,')
-                
-                # Additional validation
-                if len(nick) < 3 or len(nick) > 16:  # Minecraft username length limits
-                    continue
-                    
-                if not nick.replace('.', '').replace(',', '').isalpha():
-                    self.update_text.emit("Contains non-letter characters - skipping")
-                    continue
+                self.update_text.emit(f"Detected: {nick}")
                 
                 if nick.lower() in ["name", "name,", "name."]:
                     self.update_status.emit("Found 'name', clicking error...")
