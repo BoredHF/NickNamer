@@ -5,7 +5,6 @@ import time
 import pyautogui
 import numpy as np
 from PIL import Image
-import easyocr
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, QLabel, 
                             QVBoxLayout, QWidget, QTextEdit, QProgressBar,
                             QSlider, QHBoxLayout)
@@ -13,6 +12,7 @@ from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QPixmap, QImage
 import sys
 import os
+import easyocr
 
 class OCRWorker(QThread):
     update_image = pyqtSignal(QImage)
@@ -25,9 +25,19 @@ class OCRWorker(QThread):
         super().__init__()
         self.running = True
         self.delay = delay
-        # Initialize EasyOCR reader
-        self.reader = easyocr.Reader(['en'], gpu=False)
-        # Initialize statistics
+        # Initialize EasyOCR with optimized settings
+        self.reader = easyocr.Reader(
+            ['en'], 
+            gpu=False,
+            model_storage_directory='./models',
+            user_network_directory='./models',
+            recog_network='english_g2',
+            paragraph=False,
+            detect_network='craft',
+            rotation_info=[0],
+            width_ths=2.0,  # More aggressive width threshold
+            mag_ratio=2.5   # Larger magnification
+        )
         self.stats = {
             'total_attempts': 0,
             'names_checked': 0,
@@ -39,67 +49,26 @@ class OCRWorker(QThread):
         }
 
     def preprocess_image(self, img):
-        # Create multiple preprocessing versions
-        preprocessed_images = []
+        # Convert to RGB first (EasyOCR prefers RGB)
+        img_rgb = cv.cvtColor(img, cv.COLOR_BGR2RGB)
         
-        # Version 1: High contrast with adaptive thresholding
-        gray1 = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-        # Increase image size before processing
-        gray1 = cv.resize(gray1, None, fx=4, fy=4, interpolation=cv.INTER_CUBIC)
-        # Apply bilateral filter to reduce noise while keeping edges sharp
-        denoised1 = cv.bilateralFilter(gray1, 9, 75, 75)
-        # Adaptive threshold
-        binary1 = cv.adaptiveThreshold(denoised1, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                     cv.THRESH_BINARY, 11, 2)
-        preprocessed_images.append(binary1)
+        # Scale up image significantly
+        scaled = cv.resize(img_rgb, None, fx=5, fy=5, 
+                         interpolation=cv.INTER_CUBIC)
         
-        # Version 2: CLAHE with Otsu's thresholding
-        gray2 = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-        gray2 = cv.resize(gray2, None, fx=4, fy=4, interpolation=cv.INTER_CUBIC)
-        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-        clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(gray2)
-        # Gaussian blur to reduce noise
-        blurred = cv.GaussianBlur(enhanced, (5,5), 0)
-        # Otsu's thresholding
-        _, binary2 = cv.threshold(blurred, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
-        preprocessed_images.append(binary2)
+        # Convert to grayscale after scaling
+        gray = cv.cvtColor(scaled, cv.COLOR_RGB2GRAY)
         
-        # Version 3: Edge enhancement
-        gray3 = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-        gray3 = cv.resize(gray3, None, fx=4, fy=4, interpolation=cv.INTER_CUBIC)
-        # Sharpen image
-        kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-        sharpened = cv.filter2D(gray3, -1, kernel)
-        # Otsu's thresholding
-        _, binary3 = cv.threshold(sharpened, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
-        preprocessed_images.append(binary3)
+        # Apply threshold to get pure black and white
+        _, binary = cv.threshold(gray, 127, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
         
-        return preprocessed_images
+        # Add white padding around the image
+        padded = cv.copyMakeBorder(binary, 20, 20, 20, 20, 
+                                  cv.BORDER_CONSTANT, 
+                                  value=[255, 255, 255])
+        
+        return padded
 
-    def validate_text(self, text):
-        """Validate and clean the detected text"""
-        # Remove common OCR mistakes
-        replacements = {
-            '0': 'O',
-            '1': 'l',
-            '8': 'B',
-            '5': 'S',
-            '2': 'Z',
-            '6': 'b',
-            '9': 'g'
-        }
-        
-        # Clean the text
-        cleaned = text.strip()
-        # Replace commonly confused characters
-        for num, letter in replacements.items():
-            cleaned = cleaned.replace(num, letter)
-        
-        # Remove any remaining non-letter characters except comma and period
-        cleaned = ''.join(c for c in cleaned if c.isalpha() or c in '.,')
-        
-        return cleaned
 
     def update_statistics(self, nick, has_triple, capital_count, only_letters):
         self.stats['total_attempts'] += 1
@@ -128,17 +97,33 @@ class OCRWorker(QThread):
             
         self.update_stats.emit(self.stats)
 
+    def click_with_retry(self, image_name, retries=3):
+        """Attempt to click an image with retries"""
+        for i in range(retries):
+            try:
+                pyautogui.click(image_name)
+                return True
+            except Exception as e:
+                self.update_text.emit(f"Click retry {i+1}/{retries}: {str(e)}")
+                time.sleep(0.5)
+        return False
+
     def run(self):
         while self.running:
             try:
                 self.update_status.emit("Clicking try again...")
-                pyautogui.click("tryagain.png")
-                pyautogui.click()
-                time.sleep(self.delay)
+                if not self.click_with_retry("tryagain.png"):
+                    self.update_status.emit("Failed to find button - retrying...")
+                    continue
                 
                 with mss.mss() as screen:
-                    # Increased capture area slightly
-                    image = screen.grab({"top": 326, "left": 838, "width": 229, "height": 36})
+                    # Adjusted capture area
+                    image = screen.grab({
+                        "top": 331,     # Moved up 1 pixel
+                        "left": 842,    # Moved left 1 pixel
+                        "width": 219,   # Slightly wider
+                        "height": 26    # Slightly taller
+                    })
                     mss.tools.to_png(image.rgb, image.size, output="output.png")
                 
                 img = cv.imread("output.png")
@@ -146,68 +131,70 @@ class OCRWorker(QThread):
                     self.update_status.emit("Failed to read image")
                     continue
                 
-                # Get all preprocessed versions
-                processed_images = self.preprocess_image(img)
+                # Simple preprocessing
+                processed = self.preprocess_image(img)
                 
-                # Try OCR with different preprocessed images
-                all_attempts = []
-                for processed in processed_images:
-                    # EasyOCR detection
-                    results = self.reader.readtext(processed)
-                    for result in results:
-                        text = result[1].strip()
-                        if text:
-                            # Clean and validate the text
-                            cleaned_text = self.validate_text(text)
-                            if cleaned_text:
-                                all_attempts.append(cleaned_text)
+                # Save processed image for debugging
+                cv.imwrite("processed.png", processed)
                 
-                # Debug output
-                self.update_text.emit("OCR attempts:")
-                for i, attempt in enumerate(all_attempts):
-                    self.update_text.emit(f"Attempt {i+1}: {attempt}")
+                # OCR with better confidence handling
+                results = self.reader.readtext(
+                    processed,
+                    allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz,.',
+                    batch_size=1,
+                    min_size=20,  # Increased minimum text size
+                    text_threshold=0.8,  # Higher confidence threshold
+                    low_text=0.3,  # Lower text confidence threshold
+                    link_threshold=0.3,  # Lower link confidence threshold
+                    canvas_size=2560  # Larger canvas size
+                )
                 
-                if not all_attempts:
+                if not results:
+                    self.update_text.emit("No text detected")
                     continue
                 
-                # Choose the best result - prefer results with more letters
-                nick = max(all_attempts, 
-                         key=lambda x: sum(c.isalpha() for c in x), 
-                         default="")
+                # Get the result with highest confidence
+                result = max(results, key=lambda x: x[2])
+                nick = result[1].strip()
+                confidence = result[2]
                 
-                if not nick:
+                self.update_text.emit(f"Detected: {nick} (Confidence: {confidence:.2f})")
+                
+                if confidence < 0.8:  # Stricter confidence threshold
+                    self.update_text.emit("Low confidence - skipping")
                     continue
                 
-                self.update_text.emit(f"Selected: {nick}")
+                # Clean up the text
+                nick = nick.rstrip('.,')
                 
-                if nick.lower() in ["name,", "name.", "name"]:
+                # Additional validation
+                if len(nick) < 3 or len(nick) > 16:  # Minecraft username length limits
+                    continue
+                    
+                if not nick.replace('.', '').replace(',', '').isalpha():
+                    self.update_text.emit("Contains non-letter characters - skipping")
+                    continue
+                
+                if nick.lower() in ["name", "name,", "name."]:
                     self.update_status.emit("Found 'name', clicking error...")
-                    pyautogui.click("hypixelerror.png")
+                    if not self.click_with_retry("hypixelerror.png"):
+                        continue
                     time.sleep(1.7)
                     continue
                 
-                # Updated pattern matching with better debugging
-                # Check for exactly one capital letter
-                capital_count = sum(1 for letter in nick if letter.isupper())
-                
-                # Check for three or more of the same letter in a row (case insensitive)
+                # Pattern matching
                 has_triple = re.search(r'([a-zA-Z])\1{2,}', nick) is not None
-                
-                # Check that the name contains only letters (no numbers or special chars)
-                only_letters = all(c.isalpha() for c in nick.replace(',', '').replace('.', ''))
+                capital_count = sum(1 for letter in nick if letter.isupper())
+                only_letters = all(c.isalpha() for c in nick)
                 
                 self.update_text.emit(f"Analysis for '{nick}':")
                 self.update_text.emit(f"Has triple letters: {has_triple}")
                 self.update_text.emit(f"Capital letters: {capital_count}")
                 self.update_text.emit(f"Only letters: {only_letters}")
                 
-                # Update statistics before pattern matching
+                # Update statistics
                 self.update_statistics(nick, has_triple, capital_count, only_letters)
                 
-                # All conditions must be met:
-                # 1. Exactly one capital letter
-                # 2. Has triple letters
-                # 3. Contains only letters (no numbers)
                 if has_triple and capital_count == 1 and only_letters:
                     self.update_status.emit("Valid name found! Clicking Use...")
                     pyautogui.click("Use.PNG")
@@ -220,6 +207,21 @@ class OCRWorker(QThread):
                 self.stats['errors'] += 1
                 self.update_status.emit(f"Error: {str(e)}")
                 time.sleep(1)
+
+    def cleanup(self):
+        """Clean up resources when stopping"""
+        self.running = False
+        if hasattr(self, 'reader'):
+            del self.reader
+        # Remove temporary files
+        if os.path.exists("output.png"):
+            try:
+                os.remove("output.png")
+            except:
+                pass
+
+    def stop(self):
+        self.cleanup()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -370,7 +372,7 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(True)
 
     def stop_ocr(self):
-        self.worker.stop()
+        self.worker.cleanup()
         self.worker.wait()
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
