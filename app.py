@@ -25,15 +25,12 @@ class OCRWorker(QThread):
         super().__init__()
         self.running = True
         self.delay = delay
-        # Initialize EasyOCR with corrected settings
+        # Initialize EasyOCR with basic settings
         self.reader = easyocr.Reader(
             ['en'], 
             gpu=True,
             model_storage_directory='./models',
-            user_network_directory='./models',
-            recog_network='english_g2',
-            detect_network='craft',
-            rotation_info=[0]
+            user_network_directory='./models'
         )
         self.stats = {
             'total_attempts': 0,
